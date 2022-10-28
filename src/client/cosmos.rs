@@ -26,7 +26,7 @@ pub async fn send_tx(
     account_id: AccountId,
     cfg: &ChainCfg,
 ) -> Result<Response, ClientError> {
-    let timeout_height = 0u16; // TODO
+    let timeout_height = 100000000u32; // TODO
     let account = account(client, account_id).await?;
 
     let tx_body = tx::Body::new(vec![msg], "MEMO", timeout_height);
