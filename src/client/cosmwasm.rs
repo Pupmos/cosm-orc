@@ -1,3 +1,4 @@
+use cosmos_sdk_proto::Any;
 use cosmos_sdk_proto::cosmwasm::wasm::v1::{
     QuerySmartContractStateRequest, QuerySmartContractStateResponse,
 };
@@ -12,7 +13,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::time;
 
-use super::cosmos::{abci_query, find_event, send_tx};
+use super::cosmos::{abci_query, find_event, send_tx, send_multimsg_tx};
 use super::error::ClientError;
 use crate::client::chain_res::{
     ExecResponse, InstantiateResponse, MigrateResponse, QueryResponse, StoreCodeResponse,
@@ -158,6 +159,39 @@ impl CosmWasmClient {
         .map_err(ClientError::proto_encoding)?;
 
         let tx_res = send_tx(&self.rpc_client, msg, &signing_key, account_id, &self.cfg).await?;
+
+        Ok(ExecResponse {
+            tx_hash: tx_res.hash.to_string(),
+            height: tx_res.height.into(),
+            res: tx_res.deliver_tx.into(),
+        })
+    }
+
+    pub async fn execute_multi(
+        &self,
+        address: String,
+        payloads: Vec<Vec<u8>>,
+        key: &SigningKey,
+        funds: Vec<Coin>,
+    ) -> Result<ExecResponse, ClientError> {
+        let signing_key: secp256k1::SigningKey = key.try_into()?;
+        let account_id = key.to_account(&self.cfg.prefix)?;
+
+        let mut cosm_funds = vec![];
+        for fund in funds {
+            cosm_funds.push(fund.try_into()?);
+        }
+
+        let msgs = payloads.iter().map(|payload| MsgExecuteContract {
+            sender: account_id.clone(),
+            contract: address.parse().unwrap(),
+            msg: payload.clone(),
+            funds: cosm_funds.clone(),
+        }
+        .to_any()
+        .map_err(ClientError::proto_encoding)).collect::<Result<Vec<Any>, ClientError>>()?;
+
+        let tx_res = send_multimsg_tx(&self.rpc_client, msgs, &signing_key, account_id, &self.cfg).await?;
 
         Ok(ExecResponse {
             tx_hash: tx_res.hash.to_string(),

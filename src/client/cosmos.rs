@@ -68,6 +68,55 @@ pub async fn send_tx(
     Ok(tx_commit_response)
 }
 
+pub async fn send_multimsg_tx(
+    client: &HttpClient,
+    msgs: Vec<Any>,
+    key: &secp256k1::SigningKey,
+    account_id: AccountId,
+    cfg: &ChainCfg,
+) -> Result<Response, ClientError> {
+    let timeout_height = 100000000u32; // TODO
+    let account = account(client, account_id).await?;
+
+    let tx_body = tx::Body::new(msgs, "MEMO", timeout_height);
+
+    let fee = simulate_gas_fee(&tx_body, &account, key, cfg).await?;
+
+    // NOTE: if we are making requests in parallel with the same key, we need to serialize `account.sequence` to avoid errors
+    let auth_info =
+        SignerInfo::single_direct(Some(key.public_key()), account.sequence).auth_info(fee);
+
+    let sign_doc = SignDoc::new(
+        &tx_body,
+        &auth_info,
+        &cfg.chain_id.parse().map_err(|_| ClientError::ChainId {
+            chain_id: cfg.chain_id.to_string(),
+        })?,
+        account.account_number,
+    )
+    .map_err(ClientError::proto_encoding)?;
+
+    let tx_raw = sign_doc.sign(key).map_err(ClientError::crypto)?;
+
+    let tx_commit_response = tx_raw
+        .broadcast_commit(client)
+        .await
+        .map_err(ClientError::proto_encoding)?;
+
+    if tx_commit_response.check_tx.code.is_err() {
+        return Err(ClientError::CosmosSdk {
+            res: tx_commit_response.check_tx.into(),
+        });
+    }
+    if tx_commit_response.deliver_tx.code.is_err() {
+        return Err(ClientError::CosmosSdk {
+            res: tx_commit_response.deliver_tx.into(),
+        });
+    }
+
+    Ok(tx_commit_response)
+}
+
 pub async fn abci_query<T: Message>(
     client: &HttpClient,
     req: T,
