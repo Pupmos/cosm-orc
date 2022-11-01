@@ -244,6 +244,59 @@ impl CosmOrc {
         Ok(res)
     }
 
+    /// Executes a smart contract operation against the configured chain.
+    ///
+    /// # Arguments
+    /// * `contract_name` - Deployed smart contract name for the corresponding `msg`.
+    /// * `msg` - ExecuteMsg that `contract_name` supports.
+    /// * `op_name` - Human readable operation name for profiling bookkeeping usage.
+    /// * `key` - SigningKey used to sign the tx.
+    /// * `funds` - Optional tokens transferred to the contract after execution.
+    ///
+    /// # Errors
+    /// * If `contract_name` has not been instantiated via [Self::instantiate()]
+    ///   `cosm_orc::orchestrator::error::ContractMapError::NotDeployed` is thrown.
+    #[track_caller]
+    pub fn execute_multi<S, T>(
+        &mut self,
+        contract_name: S,
+        op_name: S,
+        msgs: &Vec<T>,
+        key: &SigningKey,
+        funds: Vec<Coin>,
+    ) -> Result<ExecResponse, ProcessError>
+    where
+        S: Into<String>,
+        T: Serialize,
+    {
+        let contract_name = contract_name.into();
+        let op_name = op_name.into();
+
+        let addr = self.contract_map.address(&contract_name)?;
+
+        let payloads = msgs
+            .iter()
+            .map(|msg| serde_json::to_vec(msg).map_err(ProcessError::json))
+            .collect::<Result<Vec<Vec<u8>>, ProcessError>>()?;
+
+        let res =
+            tokio_block(async { self.client.execute_multi(addr, payloads, key, funds).await })?;
+
+        if let Some(p) = &mut self.gas_profiler {
+            p.instrument(
+                contract_name,
+                op_name,
+                CommandType::Execute,
+                &res.res,
+                Location::caller(),
+            );
+        }
+
+        debug!("{:?}", res.res);
+
+        Ok(res)
+    }
+
     /// Queries a smart contract operation against the configured chain.
     ///
     /// # Arguments
